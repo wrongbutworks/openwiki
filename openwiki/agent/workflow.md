@@ -7,17 +7,30 @@ The documentation agent is implemented in `src/agent/`. It takes a command (`cha
 `src/agent/index.ts` follows this sequence for non-chat runs:
 
 1. Load `~/.openwiki/.env` into `process.env`.
-2. Resolve the provider via `resolveConfiguredProvider()` and ensure the provider's API key exists.
-3. Resolve the model ID from CLI input, `OPENWIKI_MODEL_ID`, or the provider's default model.
-4. Create a run context from Git state and prior update metadata.
-5. Snapshot the current `openwiki/` content hash (before the run).
-6. Build the system prompt and user prompt.
-7. Create the provider-specific model client (`ChatAnthropic`, `ChatOpenRouter`, or `ChatOpenAI`).
-8. Create a DeepAgents `LocalShellBackend` rooted at the repository with a SQLite checkpointer.
-9. Stream messages and tool events back to the CLI.
-10. For `init` and `update`, compare the post-run content snapshot to the pre-run snapshot. Write `openwiki/.last-update.json` **only if the content changed**.
+2. For `update` runs without a user message, check whether the repository has changed since the last successful update (see [Update no-op skip](#update-no-op-skip) below). If nothing changed, skip the agent run entirely and return early.
+3. Resolve the provider via `resolveConfiguredProvider()` and ensure the provider's API key exists.
+4. Resolve the model ID from CLI input, `OPENWIKI_MODEL_ID`, or the provider's default model.
+5. Create a run context from Git state and prior update metadata.
+6. Snapshot the current `openwiki/` content hash (before the run).
+7. Build the system prompt and user prompt.
+8. Create the provider-specific model client (`ChatAnthropic`, `ChatOpenRouter`, or `ChatOpenAI`).
+9. Create a DeepAgents `LocalShellBackend` rooted at the repository with a SQLite checkpointer.
+10. Stream messages and tool events back to the CLI.
+11. For `init` and `update`, compare the post-run content snapshot to the pre-run snapshot. Write `openwiki/.last-update.json` **only if the content changed**.
 
-Chat runs skip metadata writes entirely.
+Chat runs skip metadata writes entirely. Update runs that are skipped via the no-op check also skip metadata writes (and the agent run itself).
+
+## Update no-op skip
+
+For `update` runs where no user message is provided (e.g. `openwiki --update` in CI), the agent checks `getUpdateNoopStatus()` in `src/agent/utils.ts` before resolving a provider or building prompts. The check skips the entire agent run when:
+
+- `.last-update.json` exists with a `gitHead`,
+- the current HEAD matches that `gitHead` and the working tree is clean (ignoring changes to `openwiki/.last-update.json` itself), and
+- if the HEAD has advanced, the only changed paths are inside `openwiki/`.
+
+When the check passes, the agent emits a "no repository changes detected" message and returns `{ skipped: true }` without invoking the model. This avoids wasted API calls in scheduled CI workflows.
+
+The check is bypassed when a user message is provided (`shouldCheckUpdateNoop` returns `false`), so `openwiki --update "refresh the API docs"` always runs the agent.
 
 ## Provider-specific model creation
 
@@ -95,6 +108,7 @@ The agent is not just a generic chat wrapper. It is intentionally constrained so
 - Keep the prompt in sync with the actual filesystem tools and path conventions used by the CLI.
 - Be careful with `.last-update.json` semantics, because update runs use it to decide what changed since the previous successful run.
 - The content-snapshot check means a no-op update will not update metadata. If you change the snapshot logic, ensure `.last-update.json` is still excluded.
+- The update no-op skip (see above) is a separate mechanism from the content-snapshot check. The no-op check runs *before* the agent and avoids the API call entirely; the content snapshot runs *after* the agent and only controls metadata writes.
 - Credential loading happens before model resolution; changes there affect both onboarding and agent startup.
 - When adding a provider, add a branch in `createModel()` and ensure the API key env key is checked in `ensureProviderKey()`.
 - The DeepAgents backend is configured with `virtualMode: true`, which is important for documentation-only behavior.

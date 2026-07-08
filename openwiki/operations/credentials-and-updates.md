@@ -72,6 +72,10 @@ The content-change check uses `createOpenWikiContentSnapshot()`, which hashes th
 
 Update runs use this metadata to build a change summary since the previous successful OpenWiki execution — preferring `gitHead` for a precise commit range, falling back to `updatedAt` for a time-based range.
 
+### Update no-op skip
+
+Before resolving a provider or invoking the model, `update` runs without a user message check whether the repository has actually changed since the last successful update. `getUpdateNoopStatus()` in `src/agent/utils.ts` compares the current HEAD and working-tree status against the recorded `gitHead`. If the HEAD is unchanged (or only `openwiki/` files changed) and the tree is clean, the entire agent run is skipped — no API call is made and `.last-update.json` is not touched. This is distinct from the content-snapshot check (which runs *after* the agent) and is especially important for scheduled CI workflows that would otherwise consume API credits on unchanged repos.
+
 ## Scheduled CI workflows
 
 The repository includes `examples/openwiki-update.yml` as a copyable GitHub Actions scheduled update workflow. It:
@@ -106,6 +110,7 @@ GitLab users should configure protected CI/CD variables for the model provider k
 - Scheduled automation depends on the same CLI entrypoint as local users, so workflow changes should be validated against `package.json` and the CLI help text.
 - When adding a provider, update `managedEnvKeys` in `src/env.ts` so the env file is formatted correctly and diagnostics cover the new key.
 - The content-snapshot check means CI runs that produce no changes will not update `.last-update.json` or open a PR with metadata-only changes.
+- The update no-op skip means CI runs on an unchanged repo will not invoke the model at all, avoiding unnecessary API usage.
 
 ## Source map
 
